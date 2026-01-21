@@ -46,4 +46,9 @@ contract OurTokenTest is Test {
             STARTING_BALANCE - transferAmount
         );
     }
+
+    function testTransferFailsIfNotEnoughBalance() public {
+        vm.prank(testUser1);
+        ourToken.transfer(testUser2, STARTING_BALANCE + 1);
+    }
 }

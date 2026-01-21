@@ -8,4 +8,9 @@ contract OurToken is ERC20 {
     constructor(uint256 initialSupply) ERC20("OurToken", "OT") {
         _mint(msg.sender, initialSupply);
     }
+
+    //mint function
+    function mint() public {
+        _mint(msg.sender, 10 * 10 ** decimals());
+    }
 }

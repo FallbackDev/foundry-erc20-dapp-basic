@@ -38,6 +38,11 @@ interface Transaction {
 }
 
 export default function Home() {
+  //useAccount---查户口，它是wagmi提供的最基础的hook
+  //useAccount会返回一个包含十几个属性的巨大对象
+  //address: 当前连接钱包的地址，如果有值，那就是连上了；没连上就是 undefined。
+  //isConnected: 当前是否已连接
+  //{}是对象解构，靠属性名取值，名字必须对上
   const { address, isConnected } = useAccount()
 
   const [recipient, setRecipient] = useState('')
@@ -48,6 +53,8 @@ export default function Home() {
   const formatAddress = (addr: string) => `${addr.slice(0, 6)}...${addr.slice(-4)}`
 
   // Read Token Info
+  //解构重名，语法：{ 原名: 新名 }
+  //函数参数，只传一个对象，在这个对象里不限定顺序
   const { data: name } = useReadContract({
     address: OUR_TOKEN_ADDRESS,
     abi: ourTokenAbi,
@@ -66,14 +73,21 @@ export default function Home() {
     functionName: 'decimals',
   })
 
+  //读余额
+  //refetch重新读取余额
   const { data: balance, refetch: refetchBalance } = useReadContract({
     address: OUR_TOKEN_ADDRESS,
     abi: ourTokenAbi,
     functionName: 'balanceOf',
+    //在前端页面刚加载的一瞬间，有可能用户还没连钱包，此时 address 变量是空的 (undefined)。
+    //如果直接写 args: [address]，就等于发出了一个 balanceOf(undefined) 的请求。合约肯定会报错，甚至让程序崩溃。
+    //当 useReadContract 收到 args 是 undefined 时，它会非常聪明地暂时罢工（不发送请求），直到 address 变成有效值。
     args: address ? [address] : undefined,
   })
 
   // Reusable log fetcher
+  //它的作用是去链上把 Transfer事件日志全抓下来，生成左边的“交易历史列表”。
+  //这也是为了让用户转账成功后，列表里能马上多出来刚刚那一笔交易。
   const fetchLogs = useCallback(async () => {
     if (!address || !decimals) return
 
@@ -151,20 +165,48 @@ export default function Home() {
     },
   })
 
+  //useWriteContract初始化了一个交易发射器，writeContract就是那把枪
   const { data: hash, writeContract, isPending: isWritePending, error: writeError } = useWriteContract()
 
+  //持续监听，当 Wagmi 的这个 Hook 被传入有效 hash 启动后，它会在内部（浏览器后台）开启一个 定时器 (Interval)。
+  //每隔几秒钟，它偷偷向区块链节点发请求：eth_getTransactionReceipt(0x123)。
+  //这就是所谓的“持续监听”（轮询 Polling）。
+  //出块前：RPC 返回空，Hook 内部设置 isConfirming = true。这又导致 React 重跑一遍 UI，于是您的按钮上出现了那个转圈圈动画。
+  //出块后：RPC 返回 receipt，Hook 内部设置 isConfirming = false，isConfirmed = true。React 再次重跑 UI，于是您的按钮上出现了那个绿色的对勾。
+  //useWaitForTransactionReceipt是全自动的：
+  //它们内部自己藏着对应的 useState。
+  //它们内部的逻辑（轮询、网络请求）会自动调用那些看不见的 setState。
+  //作为使用者，只能被动接收它吐出来的最新状态 (isLoading, isSuccess)，完全无法手动去修改它们。
   const { isLoading: isConfirming, isSuccess: isConfirmed } =
     useWaitForTransactionReceipt({ hash })
 
+  //useWaitForTransactionReceipt (Wagmi)：
+  //是真的在**“后台持续监听”（Polling/轮询）。它每隔几秒就发请求问一次区块链。它是一个主动**的监听者。
+
+  //useEffect (React)：
+  //它不是在后台持续监听。它更像是一个**“被动触发的守门员”**。
+  //它不消耗 CPU 去轮询。它只是在 React 每次渲染完成后，对比一下依赖列表：
+  //如果依赖列表中的值发生变化了，它就会触发一次 useEffect中的函数。
+
+  //useEffect：自动化机器人
+  //useEffect(函数, [依赖列表])
+  //这是 React 最重要的 Hook 之一，叫 副作用 (Side Effect)。
+  //参数 1 (函数)：要干的活。
+  //参数 2 (依赖列表)：触发条件（监听器）。当依赖列表中的值发生变化时，函数会被重新执行。
+  //React 听好了： 请你盯着 isConfirmed 这个变量（还有后面几个凑数的）。 
+  // 只要 isConfirmed 变成了 true（哪怕稍微变一下）， 你就立刻执行前面那个函数（刷新余额、刷新日志、清空表单）。
+  //
   useEffect(() => {
     if (isConfirmed) {
       refetchBalance()
       fetchLogs() // Immediately refresh history after confirmation
+      //重置表单
       setAmount('')
       setRecipient('')
     }
   }, [isConfirmed, refetchBalance, fetchLogs])
 
+  //handleTransfer是具体的发起交易逻辑，它被绑定在了按钮的onClick事件上
   const handleTransfer = () => {
     if (!recipient || !amount) return
 
@@ -176,6 +218,18 @@ export default function Home() {
     })
   }
 
+  const handleMint = () => {
+    writeContract({
+      address: OUR_TOKEN_ADDRESS,
+      abi: ourTokenAbi,
+      functionName: 'mint',
+    })
+  }
+
+  ///////////////////////////////////////////
+  //                return
+  //////////////////////////////////////////
+
   return (
     <main className="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-900 via-slate-900 to-black text-white p-4 md:p-8 font-sans">
       <div className="max-w-4xl mx-auto space-y-8">
@@ -186,6 +240,7 @@ export default function Home() {
               <Coins className="w-8 h-8 text-white" />
             </div>
             <div>
+              {/*展示代币名称和代币符号*/}
               <h1 className="text-2xl font-bold tracking-tight text-white leading-tight">{name as string || 'OurToken'}</h1>
               <p className="text-slate-400 text-sm font-medium">{(symbol as string) || 'OTK'} Explorer</p>
             </div>
@@ -194,14 +249,19 @@ export default function Home() {
         </header>
 
         {!isConnected ? (
+          //motion.div是一个普通的 div 盒子，但这加了个 motion. 前缀。 这是引入的一个叫 Framer Motion 的动画库。 它的作用是：让这个盒子出现在屏幕上时，不那么生硬，而是只要给它写参数，它就会自己动。
+          //initial={{ opacity: 0, y: 20 }}：表示这个盒子在一开始的时候，透明度为 0（完全看不见），位置在原位下方 20 像素处。
+          //animate={{ opacity: 1, y: 0 }}：表示这个盒子在动画结束的时候，透明度变 1（完全显示），位置回到原位（y=0）。
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             className="flex flex-col items-center justify-center py-24 bg-white/5 backdrop-blur-md rounded-3xl border border-white/10 shadow-inner"
           >
+            {/*展示代币名称和代币符号*/}
             <Wallet className="w-20 h-20 text-slate-500 mb-6 opacity-50" />
             <h2 className="text-2xl font-bold mb-3 text-white">Wallet Not Connected</h2>
             <p className="text-slate-400 mb-8 max-w-sm text-center">Connect your wallet to monitor your balance and send tokens seamlessly.</p>
+            {/*ConnectButton是 RainbowKit 提供的组件，用于触发连接钱包的流程。*/}
             <ConnectButton />
           </motion.div>
         ) : (
@@ -215,9 +275,27 @@ export default function Home() {
                     <Coins className="w-4 h-4 text-blue-400" />
                   </div>
                   <div className="text-4xl font-black text-white tracking-tighter pt-3 break-all">
+                    {/*展示余额，balance以wei为单位，是bigint。*/}
+                    {/*formatUnits()函数是viem提供的，formatUnits(100...000, 18) =》 把大数除以 10^18 =》 变成字符串 "100"。*/}
+                    {/*Number()函数是JavaScript提供的，Number("100") =》 把字符串 "100" 转换成数字 100。*/}
+                    {/*toLocaleString()函数是JavaScript提供的，Number(100).toLocaleString() =》 把数字 10000 转换成字符串 "10,000"。*/}
+
+                    {/*(decimals as number || 18)是保底写法，||的意思是如果左边那个不行，就用右边的值。*/}
+                    {/*因为网络请求是异步的。当页面刚打开的几毫秒内，useReadContract 还在转圈圈，decimals 变量此时是 undefined。*/}
+                    {/*如果不加这个 || 18，formatUnits(..., undefined) 就会报错炸裂。加上这个，就能保证“就算还没查到精度，页面也能先按默认值 18 显示着，别崩溃”。*/}
                     {balance ? Number(formatUnits((balance as bigint), (decimals as number || 18))).toLocaleString() : '0'}
                   </div>
                   <div className="text-blue-400 font-bold text-lg mt-1">{symbol as string}</div>
+
+                  {/* Mint / Faucet Button */}
+                  <button
+                    onClick={handleMint}
+                    disabled={isWritePending || isConfirming}
+                    className="mt-4 px-4 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 rounded-full text-sm font-medium transition-all flex items-center gap-2 mx-auto disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Coins className="w-4 h-4" />
+                    {isWritePending || isConfirming ? 'Minting...' : 'Mint 10 Tokens (Faucet)'}
+                  </button>
                 </CardHeader>
                 <CardContent className="pt-4 border-t border-white/5 mt-4">
                   <div className="flex items-center justify-between text-xs text-slate-500 font-mono">
